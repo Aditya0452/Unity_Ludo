@@ -1,0 +1,688 @@
+import 'package:flutter/material.dart';
+import 'dart:math';
+import 'package:provider/provider.dart';
+import 'package:audioplayers/audioplayers.dart';
+
+// Enum for player colors
+enum PlayerColor { red, blue, green, yellow }
+
+extension PlayerColorName on PlayerColor {
+  String get name {
+    switch (this) {
+      case PlayerColor.red:
+        return 'red';
+      case PlayerColor.blue:
+        return 'blue';
+      case PlayerColor.green:
+        return 'green';
+      case PlayerColor.yellow:
+        return 'yellow';
+    }
+  }
+}
+
+// Represents a single Ludo token
+class LudoToken {
+  final String id;
+  final PlayerColor color;
+  int
+  position; // -1: home, 0-3/4-7/8-11/12-15: home grid, 1-52: main path, 53+: home path, 80: finish
+  bool isSafe;
+
+  LudoToken({
+    required this.id,
+    required this.color,
+    this.position = -1, // -1 means in home
+    this.isSafe = false,
+  });
+
+  LudoToken copyWith({int? position, bool? isSafe}) {
+    return LudoToken(
+      id: id,
+      color: color,
+      position: position ?? this.position,
+      isSafe: isSafe ?? this.isSafe,
+    );
+  }
+}
+
+// Custom Painter for drawing the Ludo Board
+class LudoBoardPainter extends CustomPainter {
+  final double boardSize;
+
+  LudoBoardPainter(this.boardSize);
+
+  // Define colors for the board
+  static const Color redColor = Color.fromARGB(255, 249, 55, 55);
+  static const Color blueColor = Color.fromARGB(255, 28, 141, 227);
+  static const Color greenColor = Color.fromARGB(255, 29, 167, 36);
+  static const Color yellowColor = Color.fromARGB(255, 254, 192, 34);
+  static const Color pathColor = Colors.white;
+  static const Color safeZoneColor = Color.fromARGB(255, 220, 220, 220);
+
+  static Offset _getCenter(double squareSize, int row, int col) => Offset(
+    col * squareSize + squareSize / 2,
+    row * squareSize + squareSize / 2,
+  );
+
+  static Map<int, Offset> getBoardPositions(double size) {
+    final double squareSize = size / 15;
+    Map<int, Offset> positions = {};
+
+    // Home Bases (0-15)
+    positions[0] = _getCenter(squareSize, 2, 2);
+    positions[1] = _getCenter(squareSize, 2, 3);
+    positions[2] = _getCenter(squareSize, 3, 2);
+    positions[3] = _getCenter(squareSize, 3, 3);
+
+    positions[4] = _getCenter(squareSize, 2, 11);
+    positions[5] = _getCenter(squareSize, 2, 12);
+    positions[6] = _getCenter(squareSize, 3, 11);
+    positions[7] = _getCenter(squareSize, 3, 12);
+
+    positions[8] = _getCenter(squareSize, 11, 2);
+    positions[9] = _getCenter(squareSize, 11, 3);
+    positions[10] = _getCenter(squareSize, 12, 2);
+    positions[11] = _getCenter(squareSize, 12, 3);
+
+    positions[12] = _getCenter(squareSize, 11, 11);
+    positions[13] = _getCenter(squareSize, 11, 12);
+    positions[14] = _getCenter(squareSize, 12, 11);
+    positions[15] = _getCenter(squareSize, 12, 12);
+
+    // Main Path (1-52)
+    int currentMainPathPos = 1;
+    for (int col = 1; col <= 5; col++) {
+      positions[currentMainPathPos++] = _getCenter(squareSize, 6, col);
+    }
+    for (int row = 5; row >= 0; row--) {
+      positions[currentMainPathPos++] = _getCenter(squareSize, row, 6);
+    }
+    positions[currentMainPathPos++] = _getCenter(squareSize, 0, 7);
+    for (int row = 1; row <= 6; row++) {
+      positions[currentMainPathPos++] = _getCenter(squareSize, row, 8);
+    }
+    for (int col = 9; col <= 13; col++) {
+      positions[currentMainPathPos++] = _getCenter(squareSize, 6, col);
+    }
+    positions[currentMainPathPos++] = _getCenter(squareSize, 7, 14);
+    for (int col = 13; col >= 9; col--) {
+      positions[currentMainPathPos++] = _getCenter(squareSize, 8, col);
+    }
+    for (int row = 9; row <= 14; row++) {
+      positions[currentMainPathPos++] = _getCenter(squareSize, row, 8);
+    }
+    positions[currentMainPathPos++] = _getCenter(squareSize, 14, 7);
+    for (int row = 13; row >= 9; row--) {
+      positions[currentMainPathPos++] = _getCenter(squareSize, row, 6);
+    }
+    for (int col = 5; col >= 1; col--) {
+      positions[currentMainPathPos++] = _getCenter(squareSize, 8, col);
+    }
+    positions[currentMainPathPos++] = _getCenter(squareSize, 7, 0);
+    positions[currentMainPathPos++] = _getCenter(squareSize, 6, 0);
+
+    // Home Paths (53-79)
+    for (int i = 0; i < 6; i++) {
+      positions[53 + i] = _getCenter(squareSize, 7, 1 + i);
+      positions[60 + i] = _getCenter(squareSize, 1 + i, 7);
+      positions[67 + i] = _getCenter(squareSize, 7, 13 - i);
+      positions[74 + i] = _getCenter(squareSize, 13 - i, 7);
+    }
+
+    // Center Finish (80)
+    positions[80] = _getCenter(squareSize, 7, 7);
+
+    return positions;
+  }
+
+  static final Set<int> safeZones = {1, 9, 14, 22, 27, 35, 40, 48};
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double squareSize = size.width / 15;
+
+    final Paint pathPaint = Paint()..color = pathColor;
+    final Paint borderPaint = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+
+    // Draw Home Bases
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, squareSize * 6, squareSize * 6),
+      Paint()..color = redColor,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(squareSize * 9, 0, squareSize * 6, squareSize * 6),
+      Paint()..color = greenColor,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(0, squareSize * 9, squareSize * 6, squareSize * 6),
+      Paint()..color = blueColor,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(
+        squareSize * 9,
+        squareSize * 9,
+        squareSize * 6,
+        squareSize * 6,
+      ),
+      Paint()..color = yellowColor,
+    );
+
+    // Central Finish Area (triangles)
+    final double centerStart = squareSize * 6;
+    final double centerEnd = squareSize * 9;
+    final double mid = squareSize * 7.5;
+
+    Path redTriangle = Path()
+      ..moveTo(centerStart, mid)
+      ..lineTo(mid, centerStart)
+      ..lineTo(centerEnd, mid)
+      ..close();
+    canvas.drawPath(redTriangle, Paint()..color = redColor);
+
+    Path greenTriangle = Path()
+      ..moveTo(mid, centerStart)
+      ..lineTo(centerEnd, mid)
+      ..lineTo(mid, centerEnd)
+      ..close();
+    canvas.drawPath(greenTriangle, Paint()..color = greenColor);
+
+    Path blueTriangle = Path()
+      ..moveTo(centerStart, mid)
+      ..lineTo(mid, centerEnd)
+      ..lineTo(mid, centerStart)
+      ..close();
+    canvas.drawPath(blueTriangle, Paint()..color = blueColor);
+
+    Path yellowTriangle = Path()
+      ..moveTo(centerEnd, mid)
+      ..lineTo(mid, centerEnd)
+      ..lineTo(centerStart, mid)
+      ..close();
+    canvas.drawPath(yellowTriangle, Paint()..color = yellowColor);
+
+    // Draw Paths
+    for (int row = 0; row < 15; row++) {
+      for (int col = 0; col < 15; col++) {
+        final Rect rect = Rect.fromLTWH(
+          col * squareSize,
+          row * squareSize,
+          squareSize,
+          squareSize,
+        );
+        Paint fillPaint = pathPaint;
+
+        if (row == 7 && col >= 1 && col <= 6) {
+          fillPaint = Paint()..color = redColor;
+        } else if (col == 7 && row >= 1 && row <= 6) {
+          fillPaint = Paint()..color = greenColor;
+        } else if (row == 7 && col >= 8 && col <= 13) {
+          fillPaint = Paint()..color = blueColor;
+        } else if (col == 7 && row >= 8 && row <= 13) {
+          fillPaint = Paint()..color = yellowColor;
+        } else if (row == 6 && col == 1) {
+          fillPaint = Paint()..color = redColor;
+        } else if (row == 1 && col == 8) {
+          fillPaint = Paint()..color = greenColor;
+        } else if (row == 8 && col == 13) {
+          fillPaint = Paint()..color = blueColor;
+        } else if (row == 13 && col == 6) {
+          fillPaint = Paint()..color = yellowColor;
+        } else if ((row >= 6 && row <= 8) || (col >= 6 && col <= 8)) {
+          if (!((row >= 0 && row <= 5 && col >= 0 && col <= 5) ||
+              (row >= 9 && row <= 14 && col >= 0 && col <= 5) ||
+              (row >= 0 && row <= 5 && col >= 9 && col <= 14) ||
+              (row >= 9 && row <= 14 && col >= 9 && col <= 14) ||
+              (row >= 6 && row <= 8 && col >= 6 && col <= 8))) {
+            fillPaint = pathPaint;
+          }
+        }
+        canvas.drawRect(rect, fillPaint);
+        canvas.drawRect(rect, borderPaint);
+      }
+    }
+
+    // Draw safe zones (stars as circles)
+    final Paint starPaint = Paint()..color = safeZoneColor;
+    final double starRadius = squareSize * 0.2;
+    final Map<int, Offset> currentBoardPositions = getBoardPositions(
+      size.width,
+    );
+
+    for (int index in safeZones) {
+      if (currentBoardPositions.containsKey(index)) {
+        canvas.drawCircle(currentBoardPositions[index]!, starRadius, starPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// Ludo Game State Management (using ChangeNotifier)
+class LudoGameProvider with ChangeNotifier {
+  final Map<PlayerColor, String> tokenImages;
+  final List<String> diceImages;
+  final AudioPlayer _audioPlayer = AudioPlayer();
+
+  LudoGameProvider({required this.tokenImages, required this.diceImages});
+
+  int _currentDiceValue = 1;
+  int _currentPlayerIndex = 0;
+  final List<PlayerColor> _playerOrder = [
+    PlayerColor.red,
+    PlayerColor.yellow,
+    PlayerColor.green,
+    PlayerColor.blue,
+  ];
+  String _gameMessage = 'Roll the dice to start!';
+  int _consecutiveSixes = 0;
+  // ignore: unused_field
+  LudoToken? _lastMovedToken;
+
+  // Each token starts in home (-1)
+  final Map<PlayerColor, List<LudoToken>> _playerTokens = {
+    PlayerColor.red: List.generate(
+      4,
+      (i) => LudoToken(id: 'red_$i', color: PlayerColor.red),
+    ),
+    PlayerColor.blue: List.generate(
+      4,
+      (i) => LudoToken(id: 'blue_$i', color: PlayerColor.blue),
+    ),
+    PlayerColor.green: List.generate(
+      4,
+      (i) => LudoToken(id: 'green_$i', color: PlayerColor.green),
+    ),
+    PlayerColor.yellow: List.generate(
+      4,
+      (i) => LudoToken(id: 'yellow_$i', color: PlayerColor.yellow),
+    ),
+  };
+
+  int get currentDiceValue => _currentDiceValue;
+  PlayerColor get currentPlayerColor => _playerOrder[_currentPlayerIndex];
+  String get gameMessage => _gameMessage;
+  Map<PlayerColor, List<LudoToken>> get playerTokens => _playerTokens;
+
+  late Map<int, Offset> _boardPositions;
+  void setBoardPositions(Map<int, Offset> positions) {
+    _boardPositions = positions;
+    notifyListeners();
+  }
+
+  Offset getTokenPosition(LudoToken token, double boardSize) {
+    final homePositions = {
+      PlayerColor.red: [0, 1, 2, 3],
+      PlayerColor.green: [4, 5, 6, 7],
+      PlayerColor.blue: [8, 9, 10, 11],
+      PlayerColor.yellow: [12, 13, 14, 15],
+    };
+    int pos = token.position;
+    if (pos == -1) {
+      int idx = int.parse(token.id.split('_')[1]);
+      pos = homePositions[token.color]![idx];
+    }
+    Offset baseOffset = _boardPositions[pos] ?? _boardPositions[0]!;
+    final double tokenSize = 30;
+    final double squareSize = boardSize / 15;
+    final double offsetX = squareSize / 2 - tokenSize / 2;
+    final double offsetY = squareSize / 2 - tokenSize / 2;
+    int stackIndex = 0;
+    int tokensOnSameSpot = 0;
+    for (var playerColor in _playerOrder) {
+      for (var otherToken in _playerTokens[playerColor]!) {
+        int otherPos = otherToken.position;
+        if (otherPos == -1) {
+          int idx = int.parse(otherToken.id.split('_')[1]);
+          otherPos = homePositions[otherToken.color]![idx];
+        }
+        if (otherPos == pos) {
+          tokensOnSameSpot++;
+          if (otherToken.id == token.id) {
+            stackIndex = tokensOnSameSpot - 1;
+          }
+        }
+      }
+    }
+    final double stackOffset = stackIndex * 5.0;
+    return Offset(
+      baseOffset.dx + offsetX + stackOffset,
+      baseOffset.dy + offsetY,
+    );
+  }
+
+  void rollDice() {
+    _playAudio('audio/dice_roll.mp3');
+    _currentDiceValue = Random().nextInt(6) + 1;
+    _gameMessage =
+        '${currentPlayerColor.name.toUpperCase()} rolled a $_currentDiceValue!';
+    notifyListeners();
+
+    if (_currentDiceValue == 6) {
+      _consecutiveSixes++;
+      if (_consecutiveSixes == 3) {
+        _gameMessage =
+            '${currentPlayerColor.name.toUpperCase()} rolled 3 sixes! Turn skipped.';
+        _consecutiveSixes = 0;
+        _lastMovedToken = null;
+        _nextPlayerTurn();
+        return;
+      }
+    } else {
+      _consecutiveSixes = 0;
+    }
+
+    List<LudoToken> movableTokens = _getMovableTokens(_currentDiceValue);
+
+    if (movableTokens.isEmpty) {
+      _gameMessage =
+          '${currentPlayerColor.name.toUpperCase()} has no valid moves. Turn skipped.';
+      _nextPlayerTurn();
+    } else if (movableTokens.length == 1 &&
+        (movableTokens.first.position != -1)) {
+      _moveToken(movableTokens.first, _currentDiceValue);
+    } else if (movableTokens.length == 1 &&
+        movableTokens.first.position == -1 &&
+        _currentDiceValue == 6) {
+      _moveToken(movableTokens.first, _currentDiceValue);
+    } else {
+      _gameMessage =
+          '${currentPlayerColor.name.toUpperCase()}, select a token to move.';
+    }
+    notifyListeners();
+  }
+
+  List<LudoToken> _getMovableTokens(int diceValue) {
+    List<LudoToken> tokens = _playerTokens[currentPlayerColor]!;
+    List<LudoToken> movable = [];
+    for (var token in tokens) {
+      if (token.position == -1) {
+        if (diceValue == 6) {
+          int startPosition = _getStartPosition(token.color);
+          bool startBlockedByOwn = tokens.any(
+            (t) => t.position == startPosition,
+          );
+          if (!startBlockedByOwn) {
+            movable.add(token);
+          }
+        }
+      } else if (token.position >= 1 && token.position <= 79) {
+        int targetPosition = token.position + diceValue;
+        if (targetPosition <= 80) {
+          movable.add(token);
+        }
+      }
+    }
+    return movable;
+  }
+
+  int _getStartPosition(PlayerColor color) {
+    switch (color) {
+      case PlayerColor.red:
+        return 1;
+      case PlayerColor.yellow:
+        return 40;
+      case PlayerColor.green:
+        return 14;
+      case PlayerColor.blue:
+        return 27;
+    }
+  }
+
+  void moveSelectedToken(LudoToken token) {
+    if (token.color != currentPlayerColor) {
+      _gameMessage = "It's not ${token.color.name.toUpperCase()}'s turn!";
+      notifyListeners();
+      return;
+    }
+    List<LudoToken> movableTokens = _getMovableTokens(_currentDiceValue);
+    if (!movableTokens.contains(token)) {
+      _gameMessage = "This token cannot be moved with a $_currentDiceValue.";
+      notifyListeners();
+      return;
+    }
+    _moveToken(token, _currentDiceValue);
+  }
+
+  void _moveToken(LudoToken token, int steps) {
+    int oldPosition = token.position;
+    int newPosition;
+    if (oldPosition == -1 && steps == 6) {
+      newPosition = _getStartPosition(token.color);
+      _playAudio('audio/jump.mp3');
+    } else {
+      newPosition = oldPosition + steps;
+      int mainPathEndForPlayer;
+      int homePathBase;
+      switch (token.color) {
+        case PlayerColor.red:
+          mainPathEndForPlayer = 52;
+          homePathBase = 53;
+          break;
+        case PlayerColor.yellow:
+          mainPathEndForPlayer = 39;
+          homePathBase = 74;
+          break;
+        case PlayerColor.green:
+          mainPathEndForPlayer = 13;
+          homePathBase = 60;
+          break;
+        case PlayerColor.blue:
+          mainPathEndForPlayer = 26;
+          homePathBase = 67;
+          break;
+      }
+      if (oldPosition <= mainPathEndForPlayer &&
+          newPosition > mainPathEndForPlayer) {
+        newPosition = homePathBase + (newPosition - mainPathEndForPlayer - 1);
+      }
+      if (newPosition > 80) {
+        _gameMessage = "Cannot move, overshoots finish.";
+        notifyListeners();
+        _nextPlayerTurn();
+        return;
+      }
+      _playAudio('audio/jump.mp3');
+    }
+    _playerTokens[token.color] = _playerTokens[token.color]!.map((t) {
+      if (t.id == token.id) {
+        return t.copyWith(position: newPosition, isSafe: newPosition > 52);
+      }
+      return t;
+    }).toList();
+    _lastMovedToken = _playerTokens[token.color]!.firstWhere(
+      (t) => t.id == token.id,
+    );
+    _checkAndCutOpponentTokens(token);
+    _checkWinCondition();
+    if (_currentDiceValue != 6) {
+      _nextPlayerTurn();
+    } else {
+      _gameMessage =
+          '${currentPlayerColor.name.toUpperCase()} rolled a 6! Roll again.';
+    }
+    notifyListeners();
+  }
+
+  void _checkAndCutOpponentTokens(LudoToken movedToken) {
+    if (movedToken.position == -1 || movedToken.position >= 53) return;
+    for (var playerColor in _playerOrder) {
+      if (playerColor == movedToken.color) continue;
+      for (var opponentToken in _playerTokens[playerColor]!) {
+        if (opponentToken.position == movedToken.position &&
+            !opponentToken.isSafe) {
+          _playerTokens[playerColor] = _playerTokens[playerColor]!.map((t) {
+            if (t.id == opponentToken.id) {
+              _playAudio('audio/die.mp3');
+              int homeSpot = -1;
+              return t.copyWith(position: homeSpot);
+            }
+            return t;
+          }).toList();
+          notifyListeners();
+          return;
+        }
+      }
+    }
+  }
+
+  void _checkWinCondition() {
+    bool allTokensFinished = true;
+    for (var token in _playerTokens[currentPlayerColor]!) {
+      if (token.position != 80) {
+        allTokensFinished = false;
+        break;
+      }
+    }
+    if (allTokensFinished) {
+      _gameMessage = '${currentPlayerColor.name.toUpperCase()} wins!';
+      notifyListeners();
+    }
+  }
+
+  void _nextPlayerTurn() {
+    _currentPlayerIndex = (_currentPlayerIndex + 1) % _playerOrder.length;
+    _gameMessage =
+        '${currentPlayerColor.name.toUpperCase()}, your turn to roll!';
+    notifyListeners();
+  }
+
+  Future<void> _playAudio(String asset) async {
+    try {
+      await _audioPlayer.play(AssetSource(asset));
+    } catch (e) {
+      // Optionally handle error
+    }
+  }
+
+  @override
+  void dispose() {
+    _audioPlayer.dispose();
+    super.dispose();
+  }
+}
+
+// Main Ludo Game Widget
+class LudoGameWidget extends StatefulWidget {
+  const LudoGameWidget({super.key});
+
+  @override
+  State<LudoGameWidget> createState() => _LudoGameWidgetState();
+}
+
+class _LudoGameWidgetState extends State<LudoGameWidget> {
+  @override
+  Widget build(BuildContext context) {
+    final game = Provider.of<LudoGameProvider>(context);
+    final double screenWidth = MediaQuery.of(context).size.width;
+    final double screenHeight = MediaQuery.of(context).size.height;
+    final double ludoBoardSize = screenWidth * 0.9;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      game.setBoardPositions(LudoBoardPainter.getBoardPositions(ludoBoardSize));
+    });
+
+    return Scaffold(
+      body: Container(
+        width: screenWidth,
+        height: screenHeight,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment(0.00, 0.50),
+            end: Alignment(1.00, 0.50),
+            colors: [Color(0xFF07126F), Color(0xFF0C1DA5), Color(0xFF07116C)],
+          ),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.start,
+          children: [
+            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Column(
+                children: [
+                  Text(
+                    'Current Player: ${game.currentPlayerColor.name.toUpperCase()}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    game.gameMessage,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white70, fontSize: 16),
+                  ),
+                ],
+              ),
+            ),
+            Center(
+              child: SizedBox(
+                width: ludoBoardSize,
+                height: ludoBoardSize,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: LudoBoardPainter(ludoBoardSize),
+                      ),
+                    ),
+                    ...game.playerTokens.values.expand((tokens) => tokens).map((
+                      token,
+                    ) {
+                      return _buildToken(context, token, ludoBoardSize);
+                    }).toList(),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 32),
+            // Dice at the bottom with space
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                GestureDetector(
+                  onTap: game.rollDice,
+                  child: Image.asset(
+                    game.diceImages[game.currentDiceValue - 1],
+                    width: 80,
+                    height: 80,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 32),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildToken(BuildContext context, LudoToken token, double boardSize) {
+    final game = Provider.of<LudoGameProvider>(context, listen: false);
+    Offset tokenScreenPosition = game.getTokenPosition(token, boardSize);
+
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 300),
+      left: tokenScreenPosition.dx,
+      top: tokenScreenPosition.dy,
+      child: GestureDetector(
+        onTap: () {
+          game.moveSelectedToken(token);
+        },
+        child: Image.asset(
+          game.tokenImages[token.color]!,
+          width: 30,
+          height: 30,
+        ),
+      ),
+    );
+  }
+}
